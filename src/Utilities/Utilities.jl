@@ -658,4 +658,33 @@ include("MDFlatten.jl")
 include("TextDiff.jl")
 include("Selectors.jl")
 
+function allbindings(checkdocs::Symbol, mods)
+    out = Dict{Utilities.Binding, Set{Type}}()
+    for m in mods
+        allbindings(checkdocs, m, out)
+    end
+    out
 end
+
+
+function allbindings(checkdocs::Symbol, mod::Module, out = Dict{Utilities.Binding, Set{Type}}())
+    for (obj, doc) in meta(mod)
+        isa(obj, IdDict{Any,Any}) && continue
+        name = nameof(obj)
+        isexported = Base.isexported(mod, name)
+        if checkdocs === :all || (isexported && checkdocs === :exports)
+            out[Utilities.Binding(mod, name)] = Set(sigs(doc))
+        end
+    end
+    out
+end
+
+meta(m) = Docs.meta(m)
+
+nameof(b::Base.Docs.Binding) = b.var
+nameof(x) = Base.nameof(x)
+
+sigs(x::Base.Docs.MultiDoc) = x.order
+sigs(::Any) = Type[Union{}]
+
+end # module Utilities

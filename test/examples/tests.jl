@@ -50,7 +50,7 @@ end
 
         @test realpath(doc.internal.assets) == realpath(joinpath(dirname(@__FILE__), "..", "..", "assets"))
 
-        @test length(doc.internal.pages) == 10
+        @test length(doc.internal.pages) == 11
 
         let headers = doc.internal.headers
             @test Documenter.Anchors.exists(headers, "Documentation")
@@ -72,7 +72,7 @@ end
             end
         end
 
-        @test length(doc.internal.objects) == 41
+        @test length(doc.internal.objects) == 44
     end
 
     @testset "HTML: local" begin

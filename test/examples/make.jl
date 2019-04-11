@@ -96,6 +96,17 @@ module AutoDocs
     end
 end
 
+module RemainingDocs
+    "test function f, doc 1"
+    f(x::Number) = 2*x
+
+    "test function f, doc 2"
+    f(x::String) = "2*"*x
+
+    "test function g"
+    g(x) = 2*x
+end
+
 # Build example docs
 using Documenter
 
@@ -105,10 +116,10 @@ const examples_root = dirname(@__FILE__)
 examples_markdown_doc = makedocs(
     format = :markdown,
     debug = true,
-    root  = examples_root,
+    root = examples_root,
     build = "builds/markdown",
     doctest = false,
-)
+    )
 
 
 htmlbuild_pages = Any[
@@ -120,13 +131,14 @@ htmlbuild_pages = Any[
     "Library" => [
         "lib/functions.md",
         "lib/autodocs.md",
+        "lib/remainingdocs.md",
     ],
     hide("Hidden Pages" => "hidden/index.md", Any[
         "Page X" => "hidden/x.md",
         "hidden/y.md",
         "hidden/z.md",
     ])
-]
+    ]
 
 @info("Building mock package docs: HTMLWriter / local build")
 examples_html_local_doc = makedocs(
@@ -144,7 +156,7 @@ examples_html_local_doc = makedocs(
         prettyurls = false,
         edit_branch = nothing,
     ),
-)
+    )
 
 # Build with pretty URLs and canonical links and a PNG logo
 @info("Building mock package docs: HTMLWriter / deployment build")

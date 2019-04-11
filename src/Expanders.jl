@@ -14,8 +14,10 @@ import .Documents:
     MethodNode,
     DocsNode,
     DocsNodes,
+    Document,
     EvalNode,
-    MetaNode
+    MetaNode,
+    Page
 
 import .Utilities: Selectors
 
@@ -184,29 +186,42 @@ Similar to the [`ExampleBlocks`](@ref) expander, but hides all output in the fin
 """
 abstract type SetupBlocks <: ExpanderPipeline end
 
-Selectors.order(::Type{TrackHeaders})   = 1.0
-Selectors.order(::Type{MetaBlocks})     = 2.0
-Selectors.order(::Type{DocsBlocks})     = 3.0
-Selectors.order(::Type{AutoDocsBlocks}) = 4.0
-Selectors.order(::Type{EvalBlocks})     = 5.0
-Selectors.order(::Type{IndexBlocks})    = 6.0
-Selectors.order(::Type{ContentsBlocks}) = 7.0
-Selectors.order(::Type{ExampleBlocks})  = 8.0
-Selectors.order(::Type{REPLBlocks})     = 9.0
-Selectors.order(::Type{SetupBlocks})    = 10.0
-Selectors.order(::Type{RawBlocks})      = 11.0
+"""
+Parses each code block where the language is `@remaining` and evaluates the expressions found
+within the block. Replaces the block with all available docstrings that are not covered anywhere else.
 
-Selectors.matcher(::Type{TrackHeaders},   node, page, doc) = isa(node, Markdown.Header)
-Selectors.matcher(::Type{MetaBlocks},     node, page, doc) = iscode(node, "@meta")
-Selectors.matcher(::Type{DocsBlocks},     node, page, doc) = iscode(node, "@docs")
-Selectors.matcher(::Type{AutoDocsBlocks}, node, page, doc) = iscode(node, "@autodocs")
-Selectors.matcher(::Type{EvalBlocks},     node, page, doc) = iscode(node, "@eval")
-Selectors.matcher(::Type{IndexBlocks},    node, page, doc) = iscode(node, "@index")
-Selectors.matcher(::Type{ContentsBlocks}, node, page, doc) = iscode(node, "@contents")
-Selectors.matcher(::Type{ExampleBlocks},  node, page, doc) = iscode(node, r"^@example")
-Selectors.matcher(::Type{REPLBlocks},     node, page, doc) = iscode(node, r"^@repl")
-Selectors.matcher(::Type{SetupBlocks},    node, page, doc) = iscode(node, r"^@setup")
-Selectors.matcher(::Type{RawBlocks},      node, page, doc) = iscode(node, r"^@raw")
+````markdown
+```@remaining
+```
+````
+"""
+abstract type RemainingDocsBlocks <: ExpanderPipeline end
+
+Selectors.order(::Type{TrackHeaders})           = 1.0
+Selectors.order(::Type{MetaBlocks})             = 2.0
+Selectors.order(::Type{DocsBlocks})             = 3.0
+Selectors.order(::Type{AutoDocsBlocks})         = 4.0
+Selectors.order(::Type{RemainingDocsBlocks})    = 4.5
+Selectors.order(::Type{EvalBlocks})             = 5.0
+Selectors.order(::Type{IndexBlocks})            = 6.0
+Selectors.order(::Type{ContentsBlocks})         = 7.0
+Selectors.order(::Type{ExampleBlocks})          = 8.0
+Selectors.order(::Type{REPLBlocks})             = 9.0
+Selectors.order(::Type{SetupBlocks})            = 10.0
+Selectors.order(::Type{RawBlocks})              = 11.0
+
+Selectors.matcher(::Type{TrackHeaders},         node, page, doc) = isa(node, Markdown.Header)
+Selectors.matcher(::Type{MetaBlocks},           node, page, doc) = iscode(node, "@meta")
+Selectors.matcher(::Type{DocsBlocks},           node, page, doc) = iscode(node, "@docs")
+Selectors.matcher(::Type{AutoDocsBlocks},       node, page, doc) = iscode(node, "@autodocs")
+Selectors.matcher(::Type{RemainingDocsBlocks},  node, page, doc) = iscode(node, "@remaining")
+Selectors.matcher(::Type{EvalBlocks},           node, page, doc) = iscode(node, "@eval")
+Selectors.matcher(::Type{IndexBlocks},          node, page, doc) = iscode(node, "@index")
+Selectors.matcher(::Type{ContentsBlocks},       node, page, doc) = iscode(node, "@contents")
+Selectors.matcher(::Type{ExampleBlocks},        node, page, doc) = iscode(node, r"^@example")
+Selectors.matcher(::Type{REPLBlocks},           node, page, doc) = iscode(node, r"^@repl")
+Selectors.matcher(::Type{SetupBlocks},          node, page, doc) = iscode(node, r"^@setup")
+Selectors.matcher(::Type{RawBlocks},            node, page, doc) = iscode(node, r"^@raw")
 
 # Default Expander.
 
@@ -470,6 +485,172 @@ function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
             """)
         page.mapping[x] = x
     end
+end
+
+function getRemainingBindings(doc::Documents.Document, modules)
+    bindings = Utilities.allbindings(doc.user.checkdocs, modules)
+    for object in keys(doc.internal.objects)
+        if haskey(bindings, object.binding)
+            signatures = bindings[object.binding]
+            if object.signature ≡ Union{} || length(signatures) ≡ 1
+                delete!(bindings, object.binding)
+            elseif object.signature in signatures
+                delete!(signatures, object.signature)
+            end
+        end
+    end
+    bindings
+end
+
+abstract type AbstractArgument end
+
+SymExpr = Union{Symbol,Expr}
+
+# use parameter type M for dispatching later
+# use mandatory to save whether it's mandatory or not
+struct KW{M <: Union{Module,Nothing},mandatory} <: AbstractArgument
+    sym::SymExpr
+    mod::M
+end
+KW(sym::SymExpr, mandatory::Bool=false) = KW{Nothing,mandatory}(sym, nothing)
+KW(sym::SymExpr, mod::Module; mandatory::Bool=false) = KW{Module,mandatory}(sym, mod)
+Base.convert(::Type{KW}, sym::Symbol) = KW(sym)
+ismandatory(kw::KW{<:Any,mandatory}) where {mandatory} = mandatory
+
+struct BlockArguments
+    switches::AbstractArray
+    fields::Dict{Union{Symbol,Expr}, Any}
+    args::AbstractArray
+end
+BlockArguments() = BlockArguments([],Dict(),[])
+
+switched(b::BlockArguments, switch) = switch ∈ b.switches
+Base.getindex(b::BlockArguments, sym) = b.fields[sym]
+Base.get(b::BlockArguments, sym, default) = Base.get(b.fields, sym, default)
+
+function BlockArguments(x::Markdown.Code, page::Page, doc::Document;
+        switches = [], # can be set or unset in the Argument Block
+        kws = [], # can be associated to a value
+        allow_args::Bool = false,
+        allow_kwargs::Bool = false,
+        )
+    kws = convert.(KW, kws) # ensure all kws are typed correctly
+    kw_dict = Dict(kw.sym => kw for kw in kws)
+
+    curmod = get(page.globals.meta, :CurrentModule, Main)
+    lines = Utilities.find_block_in_file(x.code, page.source)
+
+    # create the empty data strcture to be filled in the following
+    arguments = BlockArguments()
+
+    for (ex, str) in Utilities.parseblock(x.code, doc, page)
+        try
+            if Utilities.isassign(ex) # given keyword argument or kwargs
+                kw = ex.args[1]
+                val = ex.args[2]
+                mod = if kw_dict[kw].mod === nothing
+                        curmod
+                    else
+                        kw_dict[kw].mod
+                    end
+                if kw in keys(kw_dict)
+                    arguments.fields[kw] = Core.eval(mod, val)
+                elseif allow_kwargs
+                    arguments.kwargs[kw] = Core.eval(mod, val)
+                else
+                    throw(ArgumentError("Unknown keyword argument `$(strip(str))`."))
+                end
+            else # switch or args
+                if ex in switches
+                    append!(arguments.switches, ex)
+                elseif allow_args
+                    append!(arguments.args, ex)
+                else
+                    throw(ArgumentError("Unknown switch `$(strip(str))`."))
+                end
+            end
+        catch err
+            push!(doc.internal.errors, :remaining_block)
+            @warn("""
+                failed to evaluate `$(strip(str))` in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
+                ```$(x.language)
+                $(x.code)
+                ```
+                """, exception = err)
+        end
+    end
+
+    # extract the symbols of mandatory keyword arguments
+    mandatory_kws = (x->x.sym).(filter(ismandatory, kws))
+    missing_kws = setdiff(mandatory_kws, keys(arguments.fields))
+    if !isempty(missing_kws)
+        push!(doc.internal.errors, :remaining_block)
+        @warn("""
+            missing mandatory keyword arguments `$(join(missing_kws, "`, `"))` in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
+            ```$(x.language)
+            $(x.code)
+            ```
+            """)
+    end
+    arguments
+end
+
+issymbol(::Symbol) = true
+issymbol(::Any) = false
+
+function pushError(reason, x::Markdown.Code, page::Page, doc::Document)
+    push!(doc.internal.errors, :remaining_block)
+    lines = Utilities.find_block_in_file(x.code, page.source)
+    @warn("""
+        $reason in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
+        ```$(x.language)
+        $(x.code)
+        ```
+        """)
+end
+
+function createDocsNode(binding, typesig, page::Page, doc::Document)
+    object = Utilities.Object(binding, typesig)
+
+    # Track the order of insertion of objects per-binding.
+    push!(get!(doc.internal.bindings, binding, Utilities.Object[]), object)
+
+    docs = Documenter.DocSystem.getdocs(binding, typesig; modules = doc.user.modules)
+
+    # Concatenate found docstrings into a single `MD` object.
+    docstr = Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
+    docstr.meta[:results] = docs
+
+    # If the first element of the docstring is a code block, make it Julia by default.
+    doc.user.highlightsig && highlightsig!(docstr)
+
+    # Generate a unique name to be used in anchors and links for the docstring.
+    slug = Utilities.slugify(object)
+    anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
+    docsnode = DocsNode(docstr, anchor, object, page)
+    doc.internal.objects[object] = docsnode
+    docsnode
+end
+
+function Selectors.runner(::Type{RemainingDocsBlocks}, x, page, doc)
+    @debug "@remaining block found. Collecting remaining doc strings."
+
+    arguments = BlockArguments(x, page, doc; kws = [:Modules])
+
+    modules = get(arguments, :Modules, doc.user.modules)
+    if isempty(modules)
+        pushError("no modules provided", x, page, doc)
+        return page.mapping[x] = x
+    end
+
+    remaining_bindings = getRemainingBindings(doc, modules)
+    if isempty(remaining_bindings)
+        pushError("no remaing doc strings found", x, page, doc)
+        return page.mapping[x] = x
+    end
+
+    docsnodes = DocsNodes([createDocsNode(binding, typesig, page, doc) for (binding, signatures) in remaining_bindings for typesig in signatures])
+    page.mapping[x] = docsnodes
 end
 
 # @eval

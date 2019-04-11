@@ -26,7 +26,7 @@ Prints out the name of each object that has not had its docs spliced into the do
 function missingdocs(doc::Documents.Document)
     doc.user.checkdocs === :none && return
     @debug "checking for missing docstrings."
-    bindings = allbindings(doc.user.checkdocs, doc.user.modules)
+    bindings = Utilities.allbindings(doc.user.checkdocs, doc.user.modules)
     for object in keys(doc.internal.objects)
         if haskey(bindings, object.binding)
             signatures = bindings[object.binding]
@@ -50,34 +50,6 @@ function missingdocs(doc::Documents.Document)
         @warn String(take!(b))
     end
 end
-
-function allbindings(checkdocs::Symbol, mods)
-    out = Dict{Utilities.Binding, Set{Type}}()
-    for m in mods
-        allbindings(checkdocs, m, out)
-    end
-    out
-end
-
-function allbindings(checkdocs::Symbol, mod::Module, out = Dict{Utilities.Binding, Set{Type}}())
-    for (obj, doc) in meta(mod)
-        isa(obj, IdDict{Any,Any}) && continue
-        name = nameof(obj)
-        isexported = Base.isexported(mod, name)
-        if checkdocs === :all || (isexported && checkdocs === :exports)
-            out[Utilities.Binding(mod, name)] = Set(sigs(doc))
-        end
-    end
-    out
-end
-
-meta(m) = Docs.meta(m)
-
-nameof(b::Base.Docs.Binding) = b.var
-nameof(x) = Base.nameof(x)
-
-sigs(x::Base.Docs.MultiDoc) = x.order
-sigs(::Any) = Type[Union{}]
 
 
 # Footnote checks.
