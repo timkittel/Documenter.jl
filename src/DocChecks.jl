@@ -26,19 +26,20 @@ Prints out the name of each object that has not had its docs spliced into the do
 function missingdocs(doc::Documents.Document)
     doc.user.checkdocs === :none && return
     @debug "checking for missing docstrings."
-    bindings = Utilities.allbindings(doc.user.checkdocs, doc.user.modules)
-    for object in keys(doc.internal.objects)
-        if haskey(bindings, object.binding)
-            signatures = bindings[object.binding]
-            if object.signature ≡ Union{} || length(signatures) ≡ 1
-                delete!(bindings, object.binding)
-            elseif object.signature in signatures
-                delete!(signatures, object.signature)
-            end
-        end
-    end
-    n = reduce(+, map(length, values(bindings)), init=0)
-    if n > 0
+    # bindings = Utilities.allbindings(doc.user.checkdocs, doc.user.modules)
+    # for object in keys(doc.internal.objects)
+    #     if haskey(bindings, object.binding)
+    #         signatures = bindings[object.binding]
+    #         if object.signature ≡ Union{} || length(signatures) ≡ 1
+    #             delete!(bindings, object.binding)
+    #         elseif object.signature in signatures
+    #             delete!(signatures, object.signature)
+    #         end
+    #     end
+    # end
+    bindings = Utilities.getRemainingBindings(doc, doc.user.modules)
+    if !isempty(bindings)
+        n = reduce(+, map(length, values(bindings)), init=0)
         b = IOBuffer()
         println(b, "$n docstring$(n ≡ 1 ? "" : "s") potentially missing:\n")
         for (binding, signatures) in bindings

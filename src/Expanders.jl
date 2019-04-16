@@ -487,20 +487,33 @@ function Selectors.runner(::Type{AutoDocsBlocks}, x, page, doc)
     end
 end
 
-function getRemainingBindings(doc::Documents.Document, modules)
-    bindings = Utilities.allbindings(doc.user.checkdocs, modules)
-    for object in keys(doc.internal.objects)
-        if haskey(bindings, object.binding)
-            signatures = bindings[object.binding]
-            if object.signature ≡ Union{} || length(signatures) ≡ 1
-                delete!(bindings, object.binding)
-            elseif object.signature in signatures
-                delete!(signatures, object.signature)
-            end
-        end
-    end
-    bindings
+function createDocsNode(binding, typesig, page::Page, doc::Document)
+    object = Utilities.Object(binding, typesig)
+
+    # Track the order of insertion of objects per-binding.
+    push!(get!(doc.internal.bindings, binding, Utilities.Object[]), object)
+    # TODO: what does the line above do?
+
+    docs = Documenter.DocSystem.getdocs(binding, typesig; modules = doc.user.modules)
+
+    # Concatenate found docstrings into a single `MD` object.
+    docstr = Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
+    docstr.meta[:results] = docs
+
+    # If the first element of the docstring is a code block, make it Julia by default.
+    doc.user.highlightsig && highlightsig!(docstr)
+
+    # Generate a unique name to be used in anchors and links for the docstring.
+    slug = Utilities.slugify(object)
+    anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
+    # TODO: what does the line above do?
+    docsnode = DocsNode(docstr, anchor, object, page)
+    doc.internal.objects[object] = docsnode
+    # TODO: what does the line above do?
+    docsnode
 end
+
+
 
 abstract type AbstractArgument end
 
@@ -570,13 +583,7 @@ function BlockArguments(x::Markdown.Code, page::Page, doc::Document;
                 end
             end
         catch err
-            push!(doc.internal.errors, :remaining_block)
-            @warn("""
-                failed to evaluate `$(strip(str))` in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
-                ```$(x.language)
-                $(x.code)
-                ```
-                """, exception = err)
+            Utilities.pushError("failed to evaluate `$(strip(str))`"x, page, doc, exception = err)
         end
     end
 
@@ -584,68 +591,23 @@ function BlockArguments(x::Markdown.Code, page::Page, doc::Document;
     mandatory_kws = (x->x.sym).(filter(ismandatory, kws))
     missing_kws = setdiff(mandatory_kws, keys(arguments.fields))
     if !isempty(missing_kws)
-        push!(doc.internal.errors, :remaining_block)
-        @warn("""
-            missing mandatory keyword arguments `$(join(missing_kws, "`, `"))` in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
-            ```$(x.language)
-            $(x.code)
-            ```
-            """)
+        Utilities.pushError("missing mandatory keyword arguments `$(join(missing_kws, "`, `"))`"x, page, doc)
     end
     arguments
 end
 
-issymbol(::Symbol) = true
-issymbol(::Any) = false
 
-function pushError(reason, x::Markdown.Code, page::Page, doc::Document)
-    push!(doc.internal.errors, :remaining_block)
-    lines = Utilities.find_block_in_file(x.code, page.source)
-    @warn("""
-        $reason in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
-        ```$(x.language)
-        $(x.code)
-        ```
-        """)
-end
+# @remaining
+# ----------
 
-function createDocsNode(binding, typesig, page::Page, doc::Document)
-    object = Utilities.Object(binding, typesig)
-
-    # Track the order of insertion of objects per-binding.
-    push!(get!(doc.internal.bindings, binding, Utilities.Object[]), object)
-
-    docs = Documenter.DocSystem.getdocs(binding, typesig; modules = doc.user.modules)
-
-    # Concatenate found docstrings into a single `MD` object.
-    docstr = Markdown.MD(map(Documenter.DocSystem.parsedoc, docs))
-    docstr.meta[:results] = docs
-
-    # If the first element of the docstring is a code block, make it Julia by default.
-    doc.user.highlightsig && highlightsig!(docstr)
-
-    # Generate a unique name to be used in anchors and links for the docstring.
-    slug = Utilities.slugify(object)
-    anchor = Anchors.add!(doc.internal.docs, object, slug, page.build)
-    docsnode = DocsNode(docstr, anchor, object, page)
-    doc.internal.objects[object] = docsnode
-    docsnode
-end
-
-function Selectors.runner(::Type{RemainingDocsBlocks}, x, page, doc)
+function Selectors.runner(::Type{RemainingDocsBlocks}, x::Markdown.Code, page::Page, doc::Document)
     @debug "@remaining block found. Collecting remaining doc strings."
 
-    arguments = BlockArguments(x, page, doc; kws = [:Modules])
+    arguments = BlockArguments(x, page, doc; kws = [KW(:Modules, mandatory=true)])
 
-    modules = get(arguments, :Modules, doc.user.modules)
-    if isempty(modules)
-        pushError("no modules provided", x, page, doc)
-        return page.mapping[x] = x
-    end
-
-    remaining_bindings = getRemainingBindings(doc, modules)
+    remaining_bindings = Utilities.getRemainingBindings(doc, arguments[:Modules])
     if isempty(remaining_bindings)
-        pushError("no remaing doc strings found", x, page, doc)
+        Utilities.pushError("no remaing doc strings found", x, page, doc)
         return page.mapping[x] = x
     end
 

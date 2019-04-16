@@ -657,6 +657,7 @@ include("DOM.jl")
 include("MDFlatten.jl")
 include("TextDiff.jl")
 include("Selectors.jl")
+include("parseBlockArguments.jl")
 
 function allbindings(checkdocs::Symbol, mods)
     out = Dict{Utilities.Binding, Set{Type}}()
@@ -666,7 +667,7 @@ function allbindings(checkdocs::Symbol, mods)
     out
 end
 
-
+"""Return all bindings in module `mode`."""
 function allbindings(checkdocs::Symbol, mod::Module, out = Dict{Utilities.Binding, Set{Type}}())
     for (obj, doc) in meta(mod)
         isa(obj, IdDict{Any,Any}) && continue
@@ -688,3 +689,32 @@ sigs(x::Base.Docs.MultiDoc) = x.order
 sigs(::Any) = Type[Union{}]
 
 end # module Utilities
+
+"""Return all bindings in `modules` that have not been documented (yet)."""
+function getRemainingBindings(doc::Documents.Document, modules)
+    bindings = Utilities.allbindings(doc.user.checkdocs, modules)
+    for object in keys(doc.internal.objects)
+        if haskey(bindings, object.binding)
+            signatures = bindings[object.binding]
+            if object.signature ≡ Union{} || length(signatures) ≡ 1
+                delete!(bindings, object.binding)
+            elseif object.signature in signatures
+                delete!(signatures, object.signature)
+            end
+        end
+    end
+    bindings
+end
+
+
+"""Push an Error to the Documenter Pipeline Logging."""
+function pushError(reason, x::Markdown.Code, page::Page, doc::Document; kwargs...)
+    push!(doc.internal.errors, :remaining_block) # TODO: What does this do actually and what is the point of the Symbol (e.g. `:remaining_block`) here?
+    lines = Utilities.find_block_in_file(x.code, page.source)
+    @warn("""
+        $reason in `$(x.language)` block in $(Utilities.locrepr(page.source, lines))
+        ```$(x.language)
+        $(x.code)
+        ```
+        """, kwargs...)
+end
